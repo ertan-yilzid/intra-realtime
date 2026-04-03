@@ -6,7 +6,7 @@
   "permissions": ["storage"],
   "host_permissions": [
     "https://api.laplateforme.io/*",
-    "https://alcasar.laplateforme.io:3991/*"
+    "https://alcasar.laplateforme.io/*"
   ],
   "action": {
     "default_popup": "popup.html",
