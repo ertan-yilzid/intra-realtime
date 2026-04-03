@@ -3,6 +3,8 @@
   "use strict";
 
   let sessionMinutes = null;
+  let requiredHours = 30; // Default, will be updated from message
+  let pendingResponses = []; // Queue of responses waiting for sessionMinutes
 
   function today() {
     const d = new Date();
@@ -10,7 +12,7 @@
   }
 
   function patch(json) {
-    if (sessionMinutes == null) return json;
+    console.log(`[Inject] patch() called, sessionMinutes=${sessionMinutes}, json length=${json.length}`);
     try {
       const data = JSON.parse(json);
       const t = today();
@@ -23,15 +25,18 @@
       }
       updateLeaveTimeOnFriday(data);
       return JSON.stringify(data);
-    } catch { return json; }
+    } catch (err) { 
+      console.log(`[Inject] patch() error:`, err);
+      return json; 
+    }
   }
 
   function isFriday() {
     return new Date().getDay() === 5;
   }
 
-  function calculateLeaveTime(data) {
-    const REQUIRED_HOURS = 30 * 60; // 30 hours in minutes
+  function calculateLeaveTime(data, hours = 30) {
+    const REQUIRED_MINUTES = hours * 60;
     let totalMinutes = 0;
 
     // Sum all logged time
@@ -40,7 +45,7 @@
       totalMinutes += algo2;
     }
 
-    const remainingMinutes = REQUIRED_HOURS - totalMinutes;
+    const remainingMinutes = REQUIRED_MINUTES - totalMinutes;
     const remainingHours = Math.floor(remainingMinutes / 60);
     const remainingMins = remainingMinutes % 60;
 
@@ -73,13 +78,20 @@
         totalSpan.parentNode.insertAdjacentElement("afterend", leaveTimeEl);
       }
 
-      leaveTimeEl.textContent = calculateLeaveTime(data);
+      leaveTimeEl.textContent = calculateLeaveTime(data, requiredHours);
     }, 100);
   }
 
   window.addEventListener("message", (e) => {
     if (e.data?.type === "LOGTIME_SESSION_MINUTES") {
       sessionMinutes = e.data.minutes;
+      requiredHours = e.data.requiredHours || 30;
+      
+      // Process queued responses
+      for (const response of pendingResponses) {
+        response.resolve(patch(response.text));
+      }
+      pendingResponses = [];
     }
   });
 
@@ -95,9 +107,11 @@
     if (this._ltLog) {
       this.addEventListener("readystatechange", function () {
         if (this.readyState === 4 && this.status === 200) {
-          const patched = patch(this.responseText);
-          Object.defineProperty(this, "responseText", { get: () => patched, configurable: true });
-          Object.defineProperty(this, "response", { get: () => patched, configurable: true });
+          const originalText = this.responseText;
+          const patchedText = sessionMinutes !== null ? patch(originalText) : originalText;
+          
+          Object.defineProperty(this, "responseText", { get: () => patchedText, configurable: true });
+          Object.defineProperty(this, "response", { get: () => patchedText, configurable: true });
         }
       });
     }
@@ -112,6 +126,13 @@
 
     const res = await origFetch.apply(this, args);
     const text = await res.text();
-    return new Response(patch(text), { status: res.status, statusText: res.statusText, headers: res.headers });
+    const patchedText = sessionMinutes !== null ? patch(text) : text;
+    
+    const headers = new Headers(res.headers);
+    return new Response(patchedText, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: headers
+    });
   };
 })();
