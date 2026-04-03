@@ -21,8 +21,60 @@
           break;
         }
       }
+      updateLeaveTimeOnFriday(data);
       return JSON.stringify(data);
     } catch { return json; }
+  }
+
+  function isFriday() {
+    return new Date().getDay() === 5;
+  }
+
+  function calculateLeaveTime(data) {
+    const REQUIRED_HOURS = 30 * 60; // 30 hours in minutes
+    let totalMinutes = 0;
+
+    // Sum all logged time
+    for (const entry of data) {
+      const algo2 = entry.logtime_algo2 || entry.logtime_algo3 || entry.logtime_algo1 || 0;
+      totalMinutes += algo2;
+    }
+
+    const remainingMinutes = REQUIRED_HOURS - totalMinutes;
+    const remainingHours = Math.floor(remainingMinutes / 60);
+    const remainingMins = remainingMinutes % 60;
+
+    let leaveTimeText = "";
+    if (remainingMinutes <= 0) {
+      leaveTimeText = "Tu peux partir!";
+    } else {
+      const now = new Date();
+      const leaveTime = new Date(now.getTime() + remainingMinutes * 60000);
+      const hours = String(leaveTime.getHours()).padStart(2, "0");
+      const mins = String(leaveTime.getMinutes()).padStart(2, "0");
+      leaveTimeText = `Tu peux partir à ${hours}h${mins} (${remainingHours}h${remainingMins} restantes)`;
+    }
+
+    return leaveTimeText;
+  }
+
+  function updateLeaveTimeOnFriday(data) {
+    if (!isFriday()) return;
+    
+    setTimeout(() => {
+      const totalSpan = document.getElementById("logtime_total_hours_text");
+      if (!totalSpan) return;
+
+      let leaveTimeEl = document.getElementById("logtime_leave_time");
+      if (!leaveTimeEl) {
+        leaveTimeEl = document.createElement("div");
+        leaveTimeEl.id = "logtime_leave_time";
+        leaveTimeEl.style.cssText = "margin-top: -8px; text-align: center; font-weight: 500; color: #0066FF; font-size: 13px; letter-spacing: 0.3px;";
+        totalSpan.parentNode.insertAdjacentElement("afterend", leaveTimeEl);
+      }
+
+      leaveTimeEl.textContent = calculateLeaveTime(data);
+    }, 100);
   }
 
   window.addEventListener("message", (e) => {
