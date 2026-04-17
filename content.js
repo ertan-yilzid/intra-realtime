@@ -12,6 +12,7 @@ function requestSessionTime() {
           {
             type: "LOGTIME_SESSION_MINUTES",
             minutes: r.minutes,
+            seconds: r.seconds,
             requiredHours: storage.requiredHours,
             fetchedAt: Date.now()
           },
