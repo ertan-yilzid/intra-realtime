@@ -7,7 +7,8 @@ function parseDuration(durationStr) {
   // Parse "1 h 50 m 1 s" format
   const hours = (durationStr.match(/(\d+)\s*h/) || [0, 0])[1] || 0;
   const mins = (durationStr.match(/(\d+)\s*m/) || [0, 0])[1] || 0;
-  return parseInt(hours) * 60 + parseInt(mins);
+  const secs = (durationStr.match(/(\d+)\s*s/) || [0, 0])[1] || 0;
+  return parseInt(hours, 10) * 3600 + parseInt(mins, 10) * 60 + parseInt(secs, 10);
 }
 
 function getTodaysSessions(html) {
@@ -25,7 +26,7 @@ function getTodaysSessions(html) {
       if (durationMatch) {
         sessions.push({
           title: title,
-          minutes: parseDuration(durationMatch[1])
+            seconds: parseDuration(durationMatch[1])
         });
       }
     }
@@ -49,7 +50,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         fetch("https://alcasar.laplateforme.io/").then(r => r.text())
       ])
         .then(([statusData, html]) => {
-          const currentSessionMinutes = Math.floor((statusData?.accounting?.sessionTime || 0) / 60);
+          const currentSessionSeconds = Number(statusData?.accounting?.sessionTime || 0);
           const alcasarSessions = getTodaysSessions(html);
           
           // Find new sessions from ALCASAR and add them to our permanent list
@@ -61,10 +62,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
           
           // Calculate total: all stored sessions + current session
-          let totalMinutes = currentSessionMinutes;
+          let totalSeconds = currentSessionSeconds;
           for (const session of storedSessions) {
-            totalMinutes += session.minutes;
+            const sessionSeconds = typeof session.seconds === "number"
+              ? session.seconds
+              : (Number(session.minutes) || 0) * 60;
+            totalSeconds += sessionSeconds;
           }
+          const totalMinutes = Math.floor(totalSeconds / 60);
           
           // Store updated list and date
           chrome.storage.sync.set({
@@ -72,7 +77,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             lastDate: today
           });
           
-          sendResponse({ success: true, minutes: totalMinutes });
+          sendResponse({ success: true, minutes: totalMinutes, seconds: totalSeconds });
         })
         .catch(() => sendResponse({ success: false }));
     });
