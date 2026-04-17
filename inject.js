@@ -3,6 +3,7 @@
   "use strict";
 
   let sessionMinutes = null;
+  let sessionSeconds = null;
   let requiredHours = 30; // Default, will be updated from message
   let pendingResponses = []; // Queue of responses waiting for sessionMinutes
   let lastPatchedLogtimeData = null;
@@ -117,9 +118,15 @@
     return new Date().getDay() === 5;
   }
 
-  function getWeeklyTotalMinutes(data) {
+  function getWeeklyTotalMinutes(data, usePreciseToday = false) {
+    const t = today();
     let totalMinutes = 0;
     for (const entry of data) {
+      if (usePreciseToday && sessionSeconds !== null && entry.logtime_day === t) {
+        totalMinutes += sessionSeconds / 60;
+        continue;
+      }
+
       const algo2 = entry.logtime_algo2 || entry.logtime_algo3 || entry.logtime_algo1 || 0;
       totalMinutes += algo2;
     }
@@ -127,7 +134,7 @@
   }
 
   function formatCompactHoursMinutes(totalMinutes) {
-    const safeMinutes = Math.max(0, Number(totalMinutes) || 0);
+    const safeMinutes = Math.max(0, Math.floor(Number(totalMinutes) || 0));
     const hours = Math.floor(safeMinutes / 60);
     const mins = String(safeMinutes % 60).padStart(2, "0");
     return `${hours}h${mins}`;
@@ -153,19 +160,20 @@
 
   function calculateLeaveTime(data, hours = 30) {
     const REQUIRED_MINUTES = hours * 60;
-    const totalMinutes = getWeeklyTotalMinutes(data);
+    const totalMinutes = getWeeklyTotalMinutes(data, true);
 
-    const remainingMinutes = REQUIRED_MINUTES - totalMinutes;
-    const remainingHours = Math.floor(remainingMinutes / 60);
-    const remainingMins = remainingMinutes % 60;
+    const remainingSeconds = Math.max(0, Math.round((REQUIRED_MINUTES - totalMinutes) * 60));
+    const remainingMinutesRoundedUp = Math.ceil(remainingSeconds / 60);
+    const remainingHours = Math.floor(remainingMinutesRoundedUp / 60);
+    const remainingMins = remainingMinutesRoundedUp % 60;
     const remainingMinsText = String(Math.max(0, remainingMins)).padStart(2, "0");
 
     let leaveTimeText = "";
-    if (remainingMinutes <= 0) {
+    if (remainingSeconds <= 0) {
       leaveTimeText = "Tu peux partir!";
     } else {
       const now = new Date();
-      const leaveTime = new Date(now.getTime() + remainingMinutes * 60000);
+      const leaveTime = new Date(now.getTime() + remainingSeconds * 1000);
       const hours = String(leaveTime.getHours()).padStart(2, "0");
       const mins = String(leaveTime.getMinutes()).padStart(2, "0");
       leaveTimeText = `Tu peux partir à ${hours}h${mins} (${remainingHours}h${remainingMinsText} restantes)`;
@@ -196,11 +204,15 @@
   window.addEventListener("message", (e) => {
     if (e.data?.type === "LOGTIME_EXTENSION_DISABLED") {
       sessionMinutes = null;
+      sessionSeconds = null;
       return;
     }
 
     if (e.data?.type === "LOGTIME_SESSION_MINUTES") {
-      sessionMinutes = e.data.minutes;
+      sessionSeconds = Number.isFinite(e.data.seconds)
+        ? Math.max(0, Number(e.data.seconds))
+        : Math.max(0, Number(e.data.minutes) || 0) * 60;
+      sessionMinutes = Math.floor(sessionSeconds / 60);
       requiredHours = e.data.requiredHours || 30;
 
       if (lastPatchedLogtimeData) {
