@@ -100,6 +100,216 @@
     target.textContent = formatMinutesForDisplay(sessionMinutes, target.textContent || "");
   }
 
+  function toDateKey(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+
+  function normalizeLabelToDateKey(label) {
+    if (label === null || label === undefined) return "";
+
+    if (label instanceof Date) return toDateKey(label);
+
+    if (typeof label === "number") {
+      const keyFromTimestamp = toDateKey(label);
+      return keyFromTimestamp;
+    }
+
+    const text = String(label).trim();
+    if (!text) return "";
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
+    const slashDate = text.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+    if (slashDate) {
+      const day = slashDate[1].padStart(2, "0");
+      const month = slashDate[2].padStart(2, "0");
+      const year = slashDate[3]
+        ? (slashDate[3].length === 2 ? `20${slashDate[3]}` : slashDate[3])
+        : String(new Date().getFullYear());
+      return `${year}-${month}-${day}`;
+    }
+
+    const parsedKey = toDateKey(text);
+    return parsedKey;
+  }
+
+  function findTodayIndex(labels) {
+    if (!Array.isArray(labels) || labels.length === 0) return -1;
+
+    const todayKey = today();
+    for (let i = 0; i < labels.length; i += 1) {
+      if (normalizeLabelToDateKey(labels[i]) === todayKey) {
+        return i;
+      }
+    }
+
+    return -1;
+  }
+
+  function updatePointValue(data, index, value) {
+    if (!Array.isArray(data) || index < 0 || index >= data.length) return false;
+
+    const currentPoint = data[index];
+    if (typeof currentPoint === "number") {
+      data[index] = value;
+      return true;
+    }
+
+    if (currentPoint === null || currentPoint === undefined) {
+      data[index] = value;
+      return true;
+    }
+
+    if (currentPoint && typeof currentPoint === "object") {
+      if ("y" in currentPoint) {
+        currentPoint.y = value;
+        return true;
+      }
+
+      if ("value" in currentPoint) {
+        currentPoint.value = value;
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function updatePointByDateField(data, value) {
+    if (!Array.isArray(data) || !data.length) return false;
+
+    const todayKey = today();
+    let changed = false;
+
+    for (const point of data) {
+      if (!point || typeof point !== "object") continue;
+      if (!Object.prototype.hasOwnProperty.call(point, "x")) continue;
+
+      if (normalizeLabelToDateKey(point.x) !== todayKey) continue;
+
+      if ("y" in point) {
+        point.y = value;
+      } else if ("value" in point) {
+        point.value = value;
+      } else {
+        point.y = value;
+      }
+
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  function getChartJsInstances() {
+    const Chart = window.Chart;
+    if (!Chart) return [];
+
+    const instances = Chart.instances;
+    if (!instances) return [];
+
+    if (Array.isArray(instances)) {
+      return instances.filter(Boolean);
+    }
+
+    if (typeof instances.values === "function") {
+      return Array.from(instances.values()).filter(Boolean);
+    }
+
+    if (typeof instances === "object") {
+      return Object.values(instances).filter(Boolean);
+    }
+
+    return [];
+  }
+
+  function updateChartJsLiveGraph(hoursToday) {
+    let updatedAny = false;
+
+    for (const chart of getChartJsInstances()) {
+      const labels = chart?.data?.labels;
+      const index = findTodayIndex(labels);
+
+      const datasets = Array.isArray(chart?.data?.datasets) ? chart.data.datasets : [];
+      let updatedThisChart = false;
+
+      for (const dataset of datasets) {
+        const updatedByIndex = index >= 0 && updatePointValue(dataset?.data, index, hoursToday);
+        const updatedByDateField = !updatedByIndex && updatePointByDateField(dataset?.data, hoursToday);
+        if (updatedByIndex || updatedByDateField) {
+          updatedThisChart = true;
+        }
+      }
+
+      if (updatedThisChart && typeof chart.update === "function") {
+        try {
+          chart.update("none");
+        } catch (err) {
+          chart.update();
+        }
+        updatedAny = true;
+      }
+    }
+
+    return updatedAny;
+  }
+
+  function getApexChartInstances() {
+    const apexGlobal = window.Apex;
+    if (!apexGlobal || !Array.isArray(apexGlobal._chartInstances)) return [];
+
+    const instances = [];
+    for (const entry of apexGlobal._chartInstances) {
+      const chart = entry?.chart || entry;
+      if (chart) instances.push(chart);
+    }
+
+    return instances;
+  }
+
+  function updateApexLiveGraph(hoursToday) {
+    let updatedAny = false;
+
+    for (const chart of getApexChartInstances()) {
+      const labels = chart?.w?.globals?.labels || chart?.w?.config?.xaxis?.categories;
+      const index = findTodayIndex(labels);
+
+      const currentSeries = Array.isArray(chart?.w?.config?.series) ? chart.w.config.series : [];
+      if (!currentSeries.length || typeof chart.updateSeries !== "function") continue;
+
+      let changed = false;
+      const nextSeries = currentSeries.map((seriesItem) => {
+        const data = Array.isArray(seriesItem?.data) ? seriesItem.data.slice() : null;
+        if (!data) return seriesItem;
+
+        const updatedByIndex = index >= 0 && updatePointValue(data, index, hoursToday);
+        const updatedByDateField = !updatedByIndex && updatePointByDateField(data, hoursToday);
+        if (!updatedByIndex && !updatedByDateField) return seriesItem;
+
+        changed = true;
+        return { ...seriesItem, data };
+      });
+
+      if (changed) {
+        chart.updateSeries(nextSeries, false);
+        updatedAny = true;
+      }
+    }
+
+    return updatedAny;
+  }
+
+  function updateLiveGraph() {
+    if (sessionSeconds === null) return;
+
+    const hoursToday = Math.max(0, Number(sessionSeconds) || 0) / 3600;
+    updateChartJsLiveGraph(hoursToday);
+    updateApexLiveGraph(hoursToday);
+  }
+
   function patch(json) {
     try {
       const data = JSON.parse(json);
@@ -108,6 +318,7 @@
       updateWeeklyTotalDisplay(data);
       updateLeaveTimeOnFriday(data);
       setTimeout(updateLiveLogtimeBox, 0);
+      setTimeout(updateLiveGraph, 0);
       return JSON.stringify(data);
     } catch (err) { 
       return json; 
@@ -222,6 +433,7 @@
       }
 
       updateLiveLogtimeBox();
+      updateLiveGraph();
       
       // Process queued responses
       for (const response of pendingResponses) {
@@ -234,6 +446,7 @@
   // Keep displayed widgets in sync in case the page rerenders.
   setInterval(() => {
     updateLiveLogtimeBox();
+    updateLiveGraph();
     if (lastPatchedLogtimeData) {
       updateWeeklyTotalDisplay(lastPatchedLogtimeData);
       updateLeaveTimeOnFriday(lastPatchedLogtimeData);
