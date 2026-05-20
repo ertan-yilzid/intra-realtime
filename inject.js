@@ -5,8 +5,30 @@
   let sessionMinutes = null;
   let sessionSeconds = null;
   let requiredHours = 30; // Default, will be updated from message
-  let pendingResponses = []; // Queue of responses waiting for sessionMinutes
+  let pendingResponses = []; // Queue of waiters for sessionMinutes
   let lastPatchedLogtimeData = null;
+
+  function waitForSessionMinutes(timeoutMs = 1500) {
+    if (sessionMinutes !== null) return Promise.resolve(true);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const waiter = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        const index = pendingResponses.indexOf(waiter);
+        if (index >= 0) pendingResponses.splice(index, 1);
+        resolve(false);
+      }, timeoutMs);
+      pendingResponses.push(waiter);
+    });
+  }
 
   function today() {
     const d = new Date();
@@ -413,9 +435,16 @@
   }
 
   window.addEventListener("message", (e) => {
+    if (e.source !== window) return;
+    if (e.origin !== window.location.origin) return;
+
     if (e.data?.type === "LOGTIME_EXTENSION_DISABLED") {
       sessionMinutes = null;
       sessionSeconds = null;
+      for (const resolve of pendingResponses) {
+        resolve();
+      }
+      pendingResponses = [];
       return;
     }
 
@@ -436,8 +465,8 @@
       updateLiveGraph();
       
       // Process queued responses
-      for (const response of pendingResponses) {
-        response.resolve(patch(response.text));
+      for (const resolve of pendingResponses) {
+        resolve();
       }
       pendingResponses = [];
     }
@@ -466,12 +495,22 @@
       this.addEventListener("readystatechange", function () {
         if (this.readyState === 4 && this.status === 200) {
           const originalText = this.responseText;
-          const patchedText = sessionMinutes !== null ? patch(originalText) : originalText;
-          
-          Object.defineProperty(this, "responseText", { get: () => patchedText, configurable: true });
-          Object.defineProperty(this, "response", { get: () => patchedText, configurable: true });
+          Object.defineProperty(this, "responseText", {
+            get: () => (sessionMinutes !== null ? patch(originalText) : originalText),
+            configurable: true
+          });
+          Object.defineProperty(this, "response", {
+            get: () => (sessionMinutes !== null ? patch(originalText) : originalText),
+            configurable: true
+          });
         }
       });
+    }
+    if (this._ltLog && sessionMinutes === null) {
+      waitForSessionMinutes().then(() => {
+        origSend.apply(this, args);
+      });
+      return;
     }
     return origSend.apply(this, args);
   };
@@ -484,6 +523,9 @@
 
     const res = await origFetch.apply(this, args);
     const text = await res.text();
+    if (sessionMinutes === null) {
+      await waitForSessionMinutes();
+    }
     const patchedText = sessionMinutes !== null ? patch(text) : text;
     
     const headers = new Headers(res.headers);
