@@ -1,5 +1,9 @@
 # INTRA Log Update
 
+## ⚠️ Avertissement
+
+Bug: si plus d'un appareil est connecte au reseau Alcasar en meme temps, le temps de log affichera des heures incorrectes.
+
 ## Installation (Chrome)
 1. Sur cette page, clique sur "Code" puis "Download ZIP", et extrais l'archive.
 2. Ouvre `chrome://extensions`.
