@@ -1,85 +1,88 @@
-function getToday() {
-  const d = new Date();
+function getToday(date = new Date()) {
+  const d = date;
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function parseDuration(durationStr) {
-  // Parse "1 h 50 m 1 s" format
-  const hours = (durationStr.match(/(\d+)\s*h/) || [0, 0])[1] || 0;
-  const mins = (durationStr.match(/(\d+)\s*m/) || [0, 0])[1] || 0;
-  const secs = (durationStr.match(/(\d+)\s*s/) || [0, 0])[1] || 0;
-  return parseInt(hours, 10) * 3600 + parseInt(mins, 10) * 60 + parseInt(secs, 10);
+function normalizeNumber(value, fallback = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
 }
 
-function getTodaysSessions(html) {
-  const today = getToday();
-  const sessions = [];
-  
-  // Match all <li> tags with title attributes containing today's date
-  const regex = /<li[^>]*title="([^"]*)"/g;
-  let match;
-  
-  while ((match = regex.exec(html))) {
-    const title = match[1];
-    if (title.includes(today)) {
-      const durationMatch = title.match(/\(([^)]+)\)/);
-      if (durationMatch) {
-        sessions.push({
-          title: title,
-            seconds: parseDuration(durationMatch[1])
-        });
-      }
-    }
+function getAccumulatorState(storage, today) {
+  if (storage.lastDate !== today) {
+    return { totalSeconds: 0, lastSessionTime: null };
   }
-  
-  return sessions;
+
+  const totalSeconds = Math.max(0, Math.floor(normalizeNumber(storage.totalSeconds, 0)));
+  const lastSessionTimeRaw = normalizeNumber(storage.lastSessionTime, NaN);
+  const lastSessionTime = Number.isFinite(lastSessionTimeRaw) ? lastSessionTimeRaw : null;
+
+  return { totalSeconds, lastSessionTime };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "GET_SESSION_TIME") {
-    chrome.storage.sync.get({ enabled: true, todaysSessions: [], lastDate: null }, (storage) => {
-      if (!storage.enabled) return sendResponse({ success: false, disabled: true });
-      
-      const today = getToday();
-      
-      // Reset sessions if day changed
-      let storedSessions = storage.lastDate === today ? storage.todaysSessions : [];
-      
-      Promise.all([
-        fetch("https://alcasar.laplateforme.io:3991/json/status").then(r => r.json()),
-        fetch("https://alcasar.laplateforme.io/").then(r => r.text())
-      ])
-        .then(([statusData, html]) => {
-          const currentSessionSeconds = Number(statusData?.accounting?.sessionTime || 0);
-          const alcasarSessions = getTodaysSessions(html);
-          
-          // Find new sessions from ALCASAR and add them to our permanent list
-          for (const alcasarSession of alcasarSessions.slice(1)) { // Skip [0] (current session)
-            const exists = storedSessions.some(s => s.title === alcasarSession.title);
-            if (!exists) {
-              storedSessions.push(alcasarSession);
-            }
-          }
-          
-          // Calculate total: all stored sessions + current session
-          let totalSeconds = currentSessionSeconds;
-          for (const session of storedSessions) {
-            const sessionSeconds = typeof session.seconds === "number"
-              ? session.seconds
-              : (Number(session.minutes) || 0) * 60;
-            totalSeconds += sessionSeconds;
-          }
-          const totalMinutes = Math.floor(totalSeconds / 60);
-          
-          // Store updated list and date
-          chrome.storage.sync.set({
-            todaysSessions: storedSessions,
-            lastDate: today
-          });
-          
-          sendResponse({ success: true, minutes: totalMinutes, seconds: totalSeconds });
-        })
-        .catch(() => sendResponse({ success: false }));
+    chrome.storage.sync.get({ enabled: true }, (syncStorage) => {
+      if (!syncStorage.enabled) return sendResponse({ success: false, disabled: true });
+
+      chrome.storage.local.get(
+        {
+          lastDate: null,
+          totalSeconds: 0,
+          lastSessionTime: null,
+          lastSampleAt: null
+        },
+        (localStorage) => {
+          const now = new Date();
+          const today = getToday(now);
+          const nowMs = now.getTime();
+          const todayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+          const secondsSinceMidnight = Math.max(0, Math.floor((nowMs - todayStartMs) / 1000));
+          const isNewDay = localStorage.lastDate !== today;
+          const state = getAccumulatorState(localStorage, today);
+
+          fetch("https://alcasar.laplateforme.io:3991/json/status")
+            .then((r) => r.json())
+            .then((statusData) => {
+              const sessionTimeSeconds = Math.max(
+                0,
+                Math.floor(normalizeNumber(statusData?.accounting?.sessionTime, 0))
+              );
+
+              let totalSeconds = state.totalSeconds;
+              if (state.lastSessionTime === null) {
+                if (totalSeconds === 0) {
+                  totalSeconds = isNewDay
+                    ? Math.min(sessionTimeSeconds, secondsSinceMidnight)
+                    : sessionTimeSeconds;
+                }
+              } else {
+                const delta = sessionTimeSeconds - state.lastSessionTime;
+                if (delta >= 0) {
+                  totalSeconds += delta;
+                } else {
+                  totalSeconds += sessionTimeSeconds;
+                }
+              }
+
+              totalSeconds = Math.max(0, Math.floor(totalSeconds));
+
+              chrome.storage.local.set({
+                lastDate: today,
+                totalSeconds,
+                lastSessionTime: sessionTimeSeconds,
+                lastSampleAt: nowMs
+              });
+
+              sendResponse({
+                success: true,
+                minutes: Math.floor(totalSeconds / 60),
+                seconds: totalSeconds
+              });
+            })
+            .catch(() => sendResponse({ success: false }));
+        }
+      );
     });
     return true;
   }
