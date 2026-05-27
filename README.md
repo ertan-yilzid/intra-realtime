@@ -2,7 +2,7 @@
 
 ## ✅ Mise a jour
 
-Le bug de cumul est corrige. Plusieurs appareils peuvent se connecter au reseau Alcasar sans erreur de log.
+Le bug de cumul est corrigé. Plusieurs appareils peuvent se connecter au réseau Alcasar avec les mêmes identifiants sans erreur de log.
 
 ## Installation (Chrome)
 1. Sur cette page, clique sur "Code" puis "Download ZIP", et extrais l'archive.
