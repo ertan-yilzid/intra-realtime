@@ -1,4 +1,5 @@
-# INTRA Log Update
+# INTRA Log 
+Extension permettant de voir les heures de connexion sur l'intra en temps réel.
 
 ## ✅ Mise a jour
 
